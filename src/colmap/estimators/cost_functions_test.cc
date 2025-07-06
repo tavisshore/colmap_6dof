@@ -330,6 +330,53 @@ TEST(AbsolutePosePriorCostFunctor, Nominal) {
   EXPECT_NEAR(residuals[5], 3, 1e-6);
 }
 
+TEST(AbsolutePoseRotationPriorCostFunctor, Nominal) {
+  // Identity prior
+  Eigen::Quaterniond prior_rotation(1, 0, 0, 0); // w, x, y, z (Eigen)
+  std::unique_ptr<ceres::CostFunction> cost_function(
+      new ceres::AutoDiffCostFunction<AbsolutePoseRotationPriorCostFunctor, 3, 4>(
+          new AbsolutePoseRotationPriorCostFunctor(prior_rotation)));
+
+  double cam_from_world_rotation[4] = {0, 0, 0, 1}; // [x, y, z, w] = identity
+  double residuals[3];
+  const double* parameters[1] = {cam_from_world_rotation};
+  EXPECT_TRUE(cost_function->Evaluate(parameters, residuals, nullptr));
+  EXPECT_NEAR(residuals[0], 0.0, 1e-8);
+  EXPECT_NEAR(residuals[1], 0.0, 1e-8);
+  EXPECT_NEAR(residuals[2], 0.0, 1e-8);
+
+  // 180-degree rotation about x-axis (should give [pi, 0, 0] in angle-axis)
+  Eigen::AngleAxisd aa(M_PI, Eigen::Vector3d::UnitX());
+  Eigen::Quaterniond rot_180_x(aa);
+  double cam_from_world_rotation_180x[4] = {
+      rot_180_x.x(), rot_180_x.y(), rot_180_x.z(), rot_180_x.w()
+  };
+  parameters[0] = cam_from_world_rotation_180x;
+  EXPECT_TRUE(cost_function->Evaluate(parameters, residuals, nullptr));
+  EXPECT_NEAR(residuals[0], M_PI, 1e-8);
+  EXPECT_NEAR(residuals[1], 0.0, 1e-8);
+  EXPECT_NEAR(residuals[2], 0.0, 1e-8);
+
+  // Test with a random prior and current rotation (residual should match angle-axis diff)
+  Eigen::Quaterniond random_prior = Eigen::Quaterniond::UnitRandom();
+  Eigen::Quaterniond random_current = Eigen::Quaterniond::UnitRandom();
+  AbsolutePoseRotationPriorCostFunctor functor(random_prior);
+  cost_function.reset(
+      new ceres::AutoDiffCostFunction<AbsolutePoseRotationPriorCostFunctor, 3, 4>(
+          new AbsolutePoseRotationPriorCostFunctor(random_prior)));
+  double cam_from_world_rotation_rand[4] = {
+      random_current.x(), random_current.y(), random_current.z(), random_current.w()
+  };
+  parameters[0] = cam_from_world_rotation_rand;
+  EXPECT_TRUE(cost_function->Evaluate(parameters, residuals, nullptr));
+  // Check the rotation difference matches angle-axis:
+  Eigen::Quaterniond delta = random_current * random_prior.conjugate();
+  Eigen::AngleAxisd aa_diff(delta);
+  EXPECT_NEAR(residuals[0], aa_diff.angle() * aa_diff.axis().x(), 1e-6);
+  EXPECT_NEAR(residuals[1], aa_diff.angle() * aa_diff.axis().y(), 1e-6);
+  EXPECT_NEAR(residuals[2], aa_diff.angle() * aa_diff.axis().z(), 1e-6);
+}
+
 TEST(RelativePosePriorCostFunctor, Nominal) {
   Rigid3d i_from_j_prior(Eigen::Quaterniond::Identity(),
                          Eigen::Vector3d(0, 0, -1));

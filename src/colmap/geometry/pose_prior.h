@@ -87,16 +87,18 @@ struct PosePrior {
         rotation_covariance(rotation_covariance),
         coordinate_system(system) {}
 
-  inline bool IsValid() const { return position.allFinite(); }
-  inline bool IsCovarianceValid() const {
+  inline bool IsValid() const { return position.allFinite(); } // Position is necessary, rotation is optional
+  inline bool IsPositionValid() const { return position.allFinite(); }
+  inline bool IsRotationValid() const { return rotation.norm() > 0.999 && rotation.norm() < 1.001; }
+
+  inline bool IsPositionCovarianceValid() const {
     return position_covariance.allFinite();
+  }
+  inline bool IsRotationCovarianceValid() const {
+    return rotation_covariance.allFinite();
   }
   inline bool AreCovarianceValid() const {
     return position_covariance.allFinite() && rotation_covariance.allFinite();
-  }
-  inline bool IsRotationValid() const { return rotation.norm() > 0.999 && rotation.norm() < 1.001; }
-  inline bool IsRotationCovarianceValid() const {
-    return rotation_covariance.allFinite();
   }
 
   inline bool operator==(const PosePrior& other) const;

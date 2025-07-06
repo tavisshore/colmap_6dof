@@ -886,10 +886,10 @@ class PosePriorBundleAdjuster : public BundleAdjuster {
         prior_options_(prior_options),
         pose_priors_(std::move(pose_priors)),
         reconstruction_(reconstruction) {
-    const bool use_prior_position = AlignReconstruction();
+    const bool use_prior_pose = AlignReconstruction();
 
-    // Fix 7-DOFs of BA problem if not enough valid pose priors.
-    if (use_prior_position) {
+      // Fix 7-DOFs of BA problem if not enough valid pose priors.
+    if (use_prior_pose) {
       // Normalize the reconstruction to avoid any numerical instability but do
       // not transform priors as they will be transformed when added to
       // ceres::Problem.
@@ -901,11 +901,19 @@ class PosePriorBundleAdjuster : public BundleAdjuster {
     default_bundle_adjuster_ = std::make_unique<DefaultBundleAdjuster>(
         options_, config_, reconstruction);
 
-    if (use_prior_position) {
+    if (use_prior_pose) {
       if (prior_options_.use_robust_loss_on_prior_position) {
         prior_loss_function_ = std::make_unique<ceres::CauchyLoss>(
             prior_options_.prior_position_loss_scale);
       }
+
+      // (Optional) rotation robust loss
+      if (prior_options_.use_prior_rotation &&
+          prior_options_.use_robust_loss_on_prior_rotation) {
+        prior_rotation_loss_function_ = std::make_unique<ceres::CauchyLoss>(
+            prior_options_.prior_rotation_loss_scale);
+      }
+
 
       for (const image_t image_id : config_.Images()) {
         const auto pose_prior_it = pose_priors_.find(image_id);
@@ -946,7 +954,7 @@ class PosePriorBundleAdjuster : public BundleAdjuster {
   void AddPosePriorToProblem(image_t image_id,
                              const PosePrior& prior,
                              Reconstruction& reconstruction) {
-    if (!prior.IsValid() || !prior.IsCovarianceValid()) {
+    if (!prior.IsValid() || !prior.IsPositionCovarianceValid()) {
       LOG(ERROR) << "Could not add prior for image #" << image_id;
       return;
     }
@@ -974,13 +982,25 @@ class PosePriorBundleAdjuster : public BundleAdjuster {
     // cam_from_world.rotation is normalized in AddImageToProblem()
     double* cam_from_world_rotation = cam_from_world.rotation.coeffs().data();
 
+    // ceres::CostFunction* Create takes cov and arg
     problem->AddResidualBlock(
-        CovarianceWeightedCostFunctor<AbsolutePosePositionPriorCostFunctor>::
-            Create(prior.position_covariance,
-                   normalized_from_metric_ * prior.position),
-        prior_loss_function_.get(),
-        cam_from_world_rotation,
-        cam_from_world_translation);
+      CovarianceWeightedCostFunctor<AbsolutePosePositionPriorCostFunctor>::
+          Create(prior.position_covariance,
+                normalized_from_metric_ * prior.position),
+      prior_loss_function_.get(),
+      cam_from_world_rotation,
+      cam_from_world_translation);
+      
+    // Add rotation prior residual IF enabled and valid
+    if (prior_options_.use_prior_rotation && prior.IsRotationValid()) {
+      problem->AddResidualBlock(
+          CovarianceWeightedCostFunctor<AbsolutePoseRotationPriorCostFunctor>::
+              Create(prior.rotation_covariance, 
+                prior.rotation),
+          prior_rotation_loss_function_.get(),
+          cam_from_world_rotation,
+          cam_from_world_translation);
+    }
   }
 
   bool AlignReconstruction() {
@@ -988,25 +1008,42 @@ class PosePriorBundleAdjuster : public BundleAdjuster {
     if (prior_options_.ransac_max_error > 0) {
       ransac_options.max_error = prior_options_.ransac_max_error;
     } else {
-      double max_stddev_sum = 0;
-      size_t num_valid_covs = 0;
+      double max_stddev_sum_pos = 0;
+      double max_stddev_sum_rot = 0;
+      size_t num_valid_pos_covs = 0;
+      size_t num_valid_rot_covs = 0;
       for (const auto& [_, pose_prior] : pose_priors_) {
-        if (pose_prior.IsCovarianceValid()) {
-          const double max_stddev =
+        // Position
+        if (pose_prior.position_covariance.allFinite()) {
+          double max_stddev_pos =
               std::sqrt(Eigen::SelfAdjointEigenSolver<Eigen::Matrix3d>(
                             pose_prior.position_covariance)
                             .eigenvalues()
                             .maxCoeff());
-          max_stddev_sum += max_stddev;
-          ++num_valid_covs;
+          max_stddev_sum_pos += max_stddev_pos;
+          ++num_valid_pos_covs;
+        }
+        // Rotation
+        if (pose_prior.rotation_covariance.allFinite()) {
+          double max_stddev_rot =
+              std::sqrt(Eigen::SelfAdjointEigenSolver<Eigen::Matrix3d>(
+                            pose_prior.rotation_covariance)
+                            .eigenvalues()
+                            .maxCoeff());
+          max_stddev_sum_rot += max_stddev_rot;
+          ++num_valid_rot_covs;
         }
       }
-      if (num_valid_covs == 0) {
-        LOG(WARNING) << "No pose priors with valid covariance found.";
+      if (num_valid_pos_covs == 0 && num_valid_rot_covs == 0) {
+        LOG(WARNING) << "No pose priors with valid position or rotation covariance found.";
         return false;
       }
       // Set max error at the 3 sigma confidence interval. Assumes no outliers.
-      ransac_options.max_error = 3 * max_stddev_sum / num_valid_covs;
+      double mean_pos = num_valid_pos_covs > 0 ? max_stddev_sum_pos / num_valid_pos_covs : 0;
+      double mean_rot = num_valid_rot_covs > 0 ? max_stddev_sum_rot / num_valid_rot_covs : 0;
+
+      // DETERMINE HOW TO SET THIS - currently sum for a simple joint threshold:
+      ransac_options.max_error = 3 * (mean_pos + mean_rot);
     }
 
     VLOG(2) << "Robustly aligning reconstruction with max_error="
@@ -1051,7 +1088,8 @@ class PosePriorBundleAdjuster : public BundleAdjuster {
 
   std::unique_ptr<DefaultBundleAdjuster> default_bundle_adjuster_;
   std::unique_ptr<ceres::LossFunction> prior_loss_function_;
-
+  std::unique_ptr<ceres::LossFunction> prior_rotation_loss_function_;
+  
   Sim3d normalized_from_metric_;
 };
 
