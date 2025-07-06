@@ -903,7 +903,7 @@ class PosePriorBundleAdjuster : public BundleAdjuster {
 
     if (use_prior_pose) {
       if (prior_options_.use_robust_loss_on_prior_position) {
-        prior_loss_function_ = std::make_unique<ceres::CauchyLoss>(
+        prior_position_loss_function_ = std::make_unique<ceres::CauchyLoss>(
             prior_options_.prior_position_loss_scale);
       }
 
@@ -987,7 +987,7 @@ class PosePriorBundleAdjuster : public BundleAdjuster {
       CovarianceWeightedCostFunctor<AbsolutePosePositionPriorCostFunctor>::
           Create(prior.position_covariance,
                 normalized_from_metric_ * prior.position),
-      prior_loss_function_.get(),
+      prior_position_loss_function_.get(),
       cam_from_world_rotation,
       cam_from_world_translation);
       
@@ -1087,7 +1087,7 @@ class PosePriorBundleAdjuster : public BundleAdjuster {
   Reconstruction& reconstruction_;
 
   std::unique_ptr<DefaultBundleAdjuster> default_bundle_adjuster_;
-  std::unique_ptr<ceres::LossFunction> prior_loss_function_;
+  std::unique_ptr<ceres::LossFunction> prior_position_loss_function_;
   std::unique_ptr<ceres::LossFunction> prior_rotation_loss_function_;
   
   Sim3d normalized_from_metric_;
