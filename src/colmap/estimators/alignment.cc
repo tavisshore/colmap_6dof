@@ -296,6 +296,93 @@ bool AlignReconstructionToPosePriors(
 }
 
 
+
+
+
+
+
+
+// Fork from clementinboittiaux 
+void PrintAxisErrors(const std::vector<Eigen::Vector3d>& src_points,
+                    const std::vector<Eigen::Vector3d>& tgt_points,
+                    const Sim3d& transform,
+                    const std::string& stage) {
+  if (src_points.empty() || src_points.size() != tgt_points.size()) {
+    return;
+  }
+
+  // Initialize error accumulators for each axis
+  double x_abs_error_sum = 0.0;
+  double y_abs_error_sum = 0.0;
+  double z_abs_error_sum = 0.0;
+  double total_abs_error_sum = 0.0;
+
+  std::vector<double> x_errors, y_errors, z_errors, total_errors;
+
+  // For each point pair
+  for (size_t i = 0; i < src_points.size(); ++i) {
+    // Transform the source point if we're in the "after" stage
+    Eigen::Vector3d transformed_src;
+    if (stage == "After") {
+      transformed_src = transform * src_points[i];
+    } else {
+      transformed_src = src_points[i];
+    }
+
+    // Calculate error vector
+    Eigen::Vector3d error = tgt_points[i] - transformed_src;
+
+    // Accumulate absolute errors for each axis
+    double x_abs_error = std::abs(error.x());
+    double y_abs_error = std::abs(error.y());
+    double z_abs_error = std::abs(error.z());
+    double total_error = error.norm();
+
+    x_abs_error_sum += x_abs_error;
+    y_abs_error_sum += y_abs_error;
+    z_abs_error_sum += z_abs_error;
+    total_abs_error_sum += total_error;
+
+    x_errors.push_back(x_abs_error);
+    y_errors.push_back(y_abs_error);
+    z_errors.push_back(z_abs_error);
+    total_errors.push_back(total_error);
+  }
+
+  // Calculate means
+  double mean_x_error = x_abs_error_sum / src_points.size();
+  double mean_y_error = y_abs_error_sum / src_points.size();
+  double mean_z_error = z_abs_error_sum / src_points.size();
+  double mean_total_error = total_abs_error_sum / src_points.size();
+
+  // Calculate medians (first sort the vectors)
+  std::sort(x_errors.begin(), x_errors.end());
+  std::sort(y_errors.begin(), y_errors.end());
+  std::sort(z_errors.begin(), z_errors.end());
+  std::sort(total_errors.begin(), total_errors.end());
+
+  double median_x_error = x_errors[x_errors.size() / 2];
+  double median_y_error = y_errors[y_errors.size() / 2];
+  double median_z_error = z_errors[z_errors.size() / 2];
+  double median_total_error = total_errors[total_errors.size() / 2];
+
+  // Print summary statistics
+  LOG(INFO) << "===== " << stage << " Alignment Error Summary =====";
+  LOG(INFO) << "Mean absolute errors: "
+            << "X=" << mean_x_error 
+            << " Y=" << mean_y_error
+            << " Z=" << mean_z_error
+            << " Total=" << mean_total_error;
+  LOG(INFO) << "Median absolute errors: "
+            << "X=" << median_x_error 
+            << " Y=" << median_y_error
+            << " Z=" << median_z_error
+            << " Total=" << median_total_error;
+  LOG(INFO) << "==========================================";
+}
+
+
+
 bool AlignReconstructionsViaReprojections(
     const Reconstruction& src_reconstruction,
     const Reconstruction& tgt_reconstruction,

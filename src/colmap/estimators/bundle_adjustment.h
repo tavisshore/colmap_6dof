@@ -202,7 +202,7 @@ struct PosePriorBundleAdjustmentOptions {
   // (chi2 for 3DOF at 95% = 7.815).
   double prior_position_loss_scale = 7.815;
 
-  bool use_prior_rotation = true;
+  bool use_prior_rotation = true; // If available, use
 
   // Whether to use a robust loss on prior orientations.
   bool use_robust_loss_on_prior_rotation = false;

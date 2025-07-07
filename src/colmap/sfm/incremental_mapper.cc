@@ -803,31 +803,11 @@ bool IncrementalMapper::AdjustGlobalBundle(
   }
 
   // Only use prior pose if at least 3 images have been registered.
-  // const bool use_prior_position =
-  //     options.use_prior_position && ba_config.NumImages() > 2;
-  // std::unique_ptr<BundleAdjuster> bundle_adjuster;
-  // if (!use_prior_position) {
-  //   ba_config.FixGauge(BundleAdjustmentGauge::THREE_POINTS);
-  //   bundle_adjuster = CreateDefaultBundleAdjuster(
-  //       std::move(custom_ba_options), ba_config, *reconstruction_);
-  // } else {
-  //   PosePriorBundleAdjustmentOptions prior_options;
-  //   prior_options.use_robust_loss_on_prior_position =
-  //       options.use_robust_loss_on_prior_position;
-  //   prior_options.prior_position_loss_scale = options.prior_position_loss_scale;
-  //   bundle_adjuster =
-  //       CreatePosePriorBundleAdjuster(std::move(custom_ba_options),
-  //                                     prior_options,
-  //                                     ba_config,
-  //                                     database_cache_->PosePriors(),
-  //                                     *reconstruction_);
-  // }
-
-  const bool use_prior_position =
-      options.use_prior_position && ba_config.NumImages() > 2;
+  const bool use_prior_pose =
+      options.use_prior_pose && ba_config.NumImages() > 2;
 
   std::unique_ptr<BundleAdjuster> bundle_adjuster;
-  if (!use_prior_position) {
+  if (!use_prior_pose) {
     ba_config.FixGauge(BundleAdjustmentGauge::THREE_POINTS);
     bundle_adjuster = CreateDefaultBundleAdjuster(
         std::move(custom_ba_options), ba_config, *reconstruction_);
@@ -836,28 +816,22 @@ bool IncrementalMapper::AdjustGlobalBundle(
     prior_options.use_robust_loss_on_prior_position =
         options.use_robust_loss_on_prior_position;
     prior_options.prior_position_loss_scale = options.prior_position_loss_scale;
-
-  // If rotation priors exist, pass them; else, call without them.
-  const auto& pose_priors = database_cache_->PosePriors();
-  if (pose_priors.HasRotationPriors()) {
-    bundle_adjuster = CreatePosePriorBundleAdjuster(
-        std::move(custom_ba_options),
-        prior_options,
-        ba_config,
-        pose_priors.GetPositionPriors(),
-        pose_priors.GetRotationPriors(),
-        *reconstruction_);
-  } else {
-    bundle_adjuster = CreatePosePriorBundleAdjuster(
-        std::move(custom_ba_options),
-        prior_options,
-        ba_config,
-        pose_priors.GetPositionPriors(),
-        *reconstruction_);
+    bundle_adjuster =
+        CreatePosePriorBundleAdjuster(std::move(custom_ba_options),
+                                      prior_options,
+                                      ba_config,
+                                      database_cache_->PosePriors(),
+                                      *reconstruction_);
   }
 
   return bundle_adjuster->Solve().termination_type != ceres::FAILURE;
 }
+
+
+
+
+
+
 
 void IncrementalMapper::IterativeLocalRefinement(
     const int max_num_refinements,
@@ -907,7 +881,7 @@ void IncrementalMapper::IterativeGlobalRefinement(
   for (int i = 0; i < max_num_refinements; ++i) {
     const size_t num_observations = reconstruction_->ComputeNumObservations();
     AdjustGlobalBundle(options, ba_options);
-    if (normalize_reconstruction && !options.use_prior_position) {
+    if (normalize_reconstruction && !options.use_prior_pose) {
       // Normalize scene for numerical stability and
       // to avoid large scale changes in the viewer.
       reconstruction_->Normalize();

@@ -26,21 +26,25 @@ void BindPosePrior(py::module& m) {
   PyPosePrior.def(py::init<>())
       .def(py::init<const Eigen::Vector3d&>(), "position"_a)
       .def(py::init<const Eigen::Vector3d&, const PosePriorCoordinateSystem>(),
-           "position"_a,
-           "coordinate_system"_a)
+           "position"_a, "coordinate_system"_a)
       .def(py::init<const Eigen::Vector3d&, const Eigen::Matrix3d&>(),
-           "position"_a,
-           "position_covariance"_a)
-      .def(py::init<const Eigen::Vector3d&,
-                    const Eigen::Matrix3d&,
-                    const PosePriorCoordinateSystem>(),
-           "position"_a,
-           "position_covariance"_a,
-           "coordinate_system"_a)
+           "position"_a, "position_covariance"_a)
+      .def(py::init<const Eigen::Vector3d&, const Eigen::Matrix3d&, const PosePriorCoordinateSystem>(),
+           "position"_a, "position_covariance"_a, "coordinate_system"_a)
+      // --- ROTATION-AWARE CONSTRUCTORS ---
+      .def(py::init<const Eigen::Vector3d&, const Eigen::Quaterniond&, const PosePriorCoordinateSystem>(),
+           "position"_a, "rotation"_a, "coordinate_system"_a)
+      .def(py::init<const Eigen::Vector3d&, const Eigen::Quaterniond&, const Eigen::Matrix3d&, const Eigen::Matrix3d&, const PosePriorCoordinateSystem>(),
+           "position"_a, "rotation"_a, "position_covariance"_a, "rotation_covariance"_a, "coordinate_system"_a)
+      // --- PROPERTIES ---
       .def_readwrite("position", &PosePrior::position)
       .def_readwrite("position_covariance", &PosePrior::position_covariance)
+      .def_readwrite("rotation", &PosePrior::rotation)
+      .def_readwrite("rotation_covariance", &PosePrior::rotation_covariance)
       .def_readwrite("coordinate_system", &PosePrior::coordinate_system)
+      // --- VALIDITY CHECKS ---
       .def("is_valid", &PosePrior::IsValid)
-      .def("is_covariance_valid", &PosePrior::IsCovarianceValid);
+      .def("is_covariance_valid", &PosePrior::AreCovarianceValid)
+      .def("is_rotation_valid", &PosePrior::IsRotationValid);  // <-- Add this if you have one!
   MakeDataclass(PyPosePrior);
 }

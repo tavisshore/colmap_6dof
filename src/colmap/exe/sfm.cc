@@ -48,19 +48,24 @@
 namespace colmap {
 namespace {
 
-std::pair<std::vector<image_t>, std::vector<Eigen::Vector3d>>
+std::tuple<std::vector<image_t>, std::vector<Eigen::Vector3d>, std::vector<Eigen::Quaterniond>>
 ExtractExistingImages(const Reconstruction& reconstruction) {
   std::vector<image_t> fixed_image_ids = reconstruction.RegImageIds();
   std::vector<Eigen::Vector3d> orig_fixed_image_positions;
+  std::vector<Eigen::Quaterniond> orig_fixed_image_rotations;
   orig_fixed_image_positions.reserve(fixed_image_ids.size());
+  orig_fixed_image_rotations.reserve(fixed_image_ids.size());
   for (const image_t image_id : fixed_image_ids) {
-    orig_fixed_image_positions.push_back(
-        reconstruction.Image(image_id).ProjectionCenter());
+    const auto& image = reconstruction.Image(image_id);
+    orig_fixed_image_positions.push_back(image.ProjectionCenter());
+    orig_fixed_image_rotations.push_back(image.CamFromWorld().rotation); // CHECK
   }
-  return {std::move(fixed_image_ids), std::move(orig_fixed_image_positions)};
+  return {std::move(fixed_image_ids),
+          std::move(orig_fixed_image_positions),
+          std::move(orig_fixed_image_rotations)};
 }
 
-void UpdateDatabasePosePriorsCovariance(const std::string& database_path,
+void UpdateDatabasePosePriorsPositionCovariance(const std::string& database_path,
                                         const Eigen::Matrix3d& covariance) {
   Database database(database_path);
   DatabaseTransaction database_transaction(&database);
@@ -73,6 +78,24 @@ void UpdateDatabasePosePriorsCovariance(const std::string& database_path,
     if (database.ExistsPosePrior(image.ImageId())) {
       PosePrior prior = database.ReadPosePrior(image.ImageId());
       prior.position_covariance = covariance;
+      database.UpdatePosePrior(image.ImageId(), prior);
+    }
+  }
+}
+
+void UpdateDatabasePosePriorsRotationCovariance(const std::string& database_path,
+                                                const Eigen::Matrix3d& rotation_covariance) {
+  Database database(database_path);
+  DatabaseTransaction database_transaction(&database);
+
+  LOG(INFO)
+      << "Setting up database pose priors with the same rotation covariance matrix: \n"
+      << rotation_covariance << '\n';
+
+  for (const auto& image : database.ReadAllImages()) {
+    if (database.ExistsPosePrior(image.ImageId())) {
+      PosePrior prior = database.ReadPosePrior(image.ImageId());
+      prior.rotation_covariance = rotation_covariance;
       database.UpdatePosePrior(image.ImageId(), prior);
     }
   }
@@ -235,11 +258,13 @@ int RunMapper(int argc, char** argv) {
   // existing images in order to transform them back to the original coordinate
   // frame, as the reconstruction is normalized multiple times for numerical
   // stability.
-  std::vector<Eigen::Vector3d> orig_fixed_image_positions;
   std::vector<image_t> fixed_image_ids;
+  std::vector<Eigen::Vector3d> orig_fixed_image_positions;
+  std::vector<Eigen::Quaterniond> orig_fixed_image_rotations;
+
   if (options.mapper->fix_existing_frames &&
       reconstruction_manager->Size() > 0) {
-    std::tie(fixed_image_ids, orig_fixed_image_positions) =
+    std::tie(fixed_image_ids, orig_fixed_image_positions, orig_fixed_image_rotations) =
         ExtractExistingImages(*reconstruction_manager->Get(0));
   }
 
@@ -352,10 +377,16 @@ int RunPosePriorMapper(int argc, char** argv) {
   std::string input_path;
   std::string output_path;
 
-  bool overwrite_priors_covariance = false;
+  bool overwrite_priors_position_covariance = false;
   double prior_position_std_x = 1.;
   double prior_position_std_y = 1.;
   double prior_position_std_z = 1.;
+
+  // --- Rotation prior covariance controls (radians) ---
+  bool overwrite_priors_rotation_covariance = false;
+  double prior_rotation_std_x = 0.1; // [rad], uncertainty around X axis
+  double prior_rotation_std_y = 0.1; // [rad], uncertainty around Y axis
+  double prior_rotation_std_z = 0.1; // [rad], uncertainty around Z axis
 
   OptionManager options;
   options.AddDatabaseOptions();
@@ -364,11 +395,12 @@ int RunPosePriorMapper(int argc, char** argv) {
   options.AddRequiredOption("output_path", &output_path);
   options.AddMapperOptions();
 
-  options.mapper->use_prior_position = true;
+  options.mapper->use_prior_pose = true;
 
+  // --- POSITION PRIORS ---
   options.AddDefaultOption(
-      "overwrite_priors_covariance",
-      &overwrite_priors_covariance,
+      "overwrite_priors_position_covariance",
+      &overwrite_priors_position_covariance,
       "Priors covariance read from database. If true, overwrite the priors "
       "covariance using the follwoing prior_position_std_... options");
   options.AddDefaultOption("prior_position_std_x", &prior_position_std_x);
@@ -378,6 +410,23 @@ int RunPosePriorMapper(int argc, char** argv) {
                            &options.mapper->use_robust_loss_on_prior_position);
   options.AddDefaultOption("prior_position_loss_scale",
                            &options.mapper->prior_position_loss_scale);
+
+  // --- ROTATION PRIORS ---
+  options.AddDefaultOption(
+      "overwrite_priors_rotation_covariance",
+      &overwrite_priors_rotation_covariance,
+      "Rotation priors covariance read from database. If true, overwrite the rotation "
+      "prior covariance using the following prior_rotation_std_... options");
+  options.AddDefaultOption("prior_rotation_std_x", &prior_rotation_std_x,
+                          "Rotation prior standard deviation around X axis [radians]");
+  options.AddDefaultOption("prior_rotation_std_y", &prior_rotation_std_y,
+                          "Rotation prior standard deviation around Y axis [radians]");
+  options.AddDefaultOption("prior_rotation_std_z", &prior_rotation_std_z,
+                          "Rotation prior standard deviation around Z axis [radians]");
+  options.AddDefaultOption("use_robust_loss_on_prior_rotation",
+                           &options.mapper->use_robust_loss_on_prior_rotation);
+  options.AddDefaultOption("prior_position_loss_scale",
+                           &options.mapper->prior_rotation_loss_scale);
   options.Parse(argc, argv);
 
   if (!ExistsDir(output_path)) {
@@ -385,14 +434,24 @@ int RunPosePriorMapper(int argc, char** argv) {
     return EXIT_FAILURE;
   }
 
-  if (overwrite_priors_covariance) {
+  if (overwrite_priors_position_covariance) {
     const Eigen::Matrix3d covariance =
         Eigen::Vector3d(
             prior_position_std_x, prior_position_std_y, prior_position_std_z)
             .cwiseAbs2()
             .asDiagonal();
-    UpdateDatabasePosePriorsCovariance(*options.database_path, covariance);
+    UpdateDatabasePosePriorsPositionCovariance(*options.database_path, covariance);
   }
+
+  if (overwrite_priors_rotation_covariance) {
+  const Eigen::Matrix3d rotation_covariance =
+      Eigen::Vector3d(
+          prior_rotation_std_x, prior_rotation_std_y, prior_rotation_std_z)
+          .cwiseAbs2()
+          .asDiagonal();
+  UpdateDatabasePosePriorsRotationCovariance(*options.database_path, rotation_covariance);
+}
+
 
   auto reconstruction_manager = std::make_shared<ReconstructionManager>();
   if (input_path != "") {
@@ -407,13 +466,16 @@ int RunPosePriorMapper(int argc, char** argv) {
   // existing images in order to transform them back to the original coordinate
   // frame, as the reconstruction is normalized multiple times for numerical
   // stability.
-  std::vector<Eigen::Vector3d> orig_fixed_image_positions;
   std::vector<image_t> fixed_image_ids;
+  std::vector<Eigen::Vector3d> orig_fixed_image_positions;
+  std::vector<Eigen::Quaterniond> orig_fixed_image_rotations;
+
   if (options.mapper->fix_existing_frames &&
       reconstruction_manager->Size() > 0) {
-    std::tie(fixed_image_ids, orig_fixed_image_positions) =
+    std::tie(fixed_image_ids, orig_fixed_image_positions, orig_fixed_image_rotations) =
         ExtractExistingImages(*reconstruction_manager->Get(0));
   }
+
 
   IncrementalPipeline mapper(options.mapper,
                              *options.image_path,

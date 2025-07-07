@@ -153,8 +153,8 @@ void BindIncrementalPipeline(py::module& m) {
       .def_readwrite("ba_gpu_index",
                      &IncrementalPipelineOptions::ba_gpu_index,
                      "Index of CUDA GPU to use for BA, if available.")
-      .def_readwrite("use_prior_position",
-                     &Opts::use_prior_position,
+      .def_readwrite("use_prior_pose",
+                     &Opts::use_prior_pose,
                      "Whether to use priors on the camera positions.")
       .def_readwrite("use_robust_loss_on_prior_position",
                      &Opts::use_robust_loss_on_prior_position,
@@ -162,6 +162,13 @@ void BindIncrementalPipeline(py::module& m) {
       .def_readwrite("prior_position_loss_scale",
                      &Opts::prior_position_loss_scale,
                      "Threshold on the residual for the robust position prior "
+                     "loss (chi2 for 3DOF at 95% = 7.815).")
+      .def_readwrite("use_robust_loss_on_prior_rotation",
+                     &Opts::use_robust_loss_on_prior_rotation,
+                     "Whether to use a robust loss on prior camera rotations.")
+      .def_readwrite("prior_rotation_loss_scale",
+                     &Opts::prior_rotation_loss_scale,
+                     "Threshold on the residual for the robust rotation prior "
                      "loss (chi2 for 3DOF at 95% = 7.815).")
       .def_readwrite("snapshot_path",
                      &Opts::snapshot_path,

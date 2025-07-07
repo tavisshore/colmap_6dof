@@ -713,24 +713,17 @@ PosePrior Database::ReadPosePrior(const image_t image_id) const {
   Sqlite3StmtContext context(sql_stmt_read_pose_prior_);
 
   SQLITE3_CALL(sqlite3_bind_int64(sql_stmt_read_pose_prior_, 1, image_id));
+
   PosePrior prior;
   const int rc = SQLITE3_CALL(sqlite3_step(sql_stmt_read_pose_prior_));
   if (rc == SQLITE_ROW) {
-    prior.position =
-        ReadStaticMatrixBlob<Eigen::Vector3d>(sql_stmt_read_pose_prior_, rc, 1);
-    prior.coordinate_system = static_cast<PosePrior::CoordinateSystem>(
-        sqlite3_column_int64(sql_stmt_read_pose_prior_, 2));
-    prior.position_covariance =
-        ReadStaticMatrixBlob<Eigen::Matrix3d>(sql_stmt_read_pose_prior_, rc, 3);
+    prior.position = ReadStaticMatrixBlob<Eigen::Vector3d>(sql_stmt_read_pose_prior_, rc, 1);
+    prior.coordinate_system = static_cast<PosePrior::CoordinateSystem>(sqlite3_column_int64(sql_stmt_read_pose_prior_, 2));
+    prior.position_covariance = ReadStaticMatrixBlob<Eigen::Matrix3d>(sql_stmt_read_pose_prior_, rc, 3);
 
-    // Read rotation if not NULL (column 4)
-    if (sqlite3_column_type(sql_stmt_read_pose_prior_, 4) != SQLITE_NULL) {
-      Eigen::Vector4d rot_coeffs =
-          ReadStaticMatrixBlob<Eigen::Vector4d>(sql_stmt_read_pose_prior_, rc, 4);
-      // Eigen::Quaterniond's constructor takes (w, x, y, z), but .coeffs() is [x y z w].
-      prior.rotation = Eigen::Quaterniond(rot_coeffs[3], rot_coeffs[0], rot_coeffs[1], rot_coeffs[2]);
-    }
-    // else: leave prior.rotation as default (identity or uninitialized)
+    const Eigen::Vector4d quat_wxyz = ReadStaticMatrixBlob<Eigen::Vector4d>(sql_stmt_read_pose_prior_, rc, 4);
+    prior.rotation = Eigen::Quaterniond(quat_wxyz(0), quat_wxyz(1), quat_wxyz(2), quat_wxyz(3));
+    prior.rotation_covariance = ReadStaticMatrixBlob<Eigen::Matrix3d>(sql_stmt_read_pose_prior_, rc, 5);
   }
   return prior;
 }
@@ -1037,31 +1030,29 @@ image_t Database::WriteImage(const Image& image,
   return static_cast<image_t>(sqlite3_last_insert_rowid(database_));
 }
 
+
+
 void Database::WritePosePrior(const image_t image_id,
                               const PosePrior& pose_prior) const {
   Sqlite3StmtContext context(sql_stmt_write_pose_prior_);
 
   SQLITE3_CALL(sqlite3_bind_int64(sql_stmt_write_pose_prior_, 1, image_id));
+
   WriteStaticMatrixBlob(sql_stmt_write_pose_prior_, pose_prior.position, 2);
+
   SQLITE3_CALL(sqlite3_bind_int64(
       sql_stmt_write_pose_prior_,
       3,
       static_cast<sqlite3_int64>(pose_prior.coordinate_system)));
-  WriteStaticMatrixBlob(
-      sql_stmt_write_pose_prior_, pose_prior.position_covariance, 4);
 
-  // Write rotation if valid, else NULL
-  if (pose_prior.IsRotationValid()) {
-    WriteStaticMatrixBlob(
-        sql_stmt_write_pose_prior_, pose_prior.rotation.coeffs(), 5);
-  } else {
-    // Bind NULL if rotation does not exist or is invalid
-    SQLITE3_CALL(sqlite3_bind_null(sql_stmt_write_pose_prior_, 5));
-  }
+  WriteStaticMatrixBlob(sql_stmt_write_pose_prior_, pose_prior.position_covariance, 4);
 
+  const Eigen::Vector4d quat_wxyz(pose_prior.rotation.w(), pose_prior.rotation.x(), pose_prior.rotation.y(), pose_prior.rotation.z());
+  WriteStaticMatrixBlob(sql_stmt_write_pose_prior_, quat_wxyz, 5);
+
+  WriteStaticMatrixBlob(sql_stmt_write_pose_prior_, pose_prior.rotation_covariance, 6);
   SQLITE3_CALL(sqlite3_step(sql_stmt_write_pose_prior_));
 }
-
 
 void Database::WriteKeypoints(const image_t image_id,
                               const FeatureKeypoints& keypoints) const {
@@ -1274,23 +1265,14 @@ void Database::UpdatePosePrior(image_t image_id,
   Sqlite3StmtContext context(sql_stmt_update_pose_prior_);
 
   WriteStaticMatrixBlob(sql_stmt_update_pose_prior_, pose_prior.position, 1);
-  SQLITE3_CALL(sqlite3_bind_int64(
-      sql_stmt_update_pose_prior_,
-      2,
-      static_cast<sqlite3_int64>(pose_prior.coordinate_system)));
-  WriteStaticMatrixBlob(
-      sql_stmt_update_pose_prior_, pose_prior.position_covariance, 3);
+  SQLITE3_CALL(sqlite3_bind_int64(sql_stmt_update_pose_prior_, 2, static_cast<sqlite3_int64>(pose_prior.coordinate_system)));
+  
+  WriteStaticMatrixBlob(sql_stmt_update_pose_prior_, pose_prior.position_covariance, 3);
+  SQLITE3_CALL(sqlite3_bind_int64(sql_stmt_update_pose_prior_, 4, image_id));
 
-  // Write rotation if valid, else NULL (column 4)
-  if (pose_prior.IsRotationValid()) {
-    WriteStaticMatrixBlob(
-        sql_stmt_update_pose_prior_, pose_prior.rotation.coeffs(), 4);
-  } else {
-    SQLITE3_CALL(sqlite3_bind_null(sql_stmt_update_pose_prior_, 4));
-  }
-
-  // image_id is now column 5
-  SQLITE3_CALL(sqlite3_bind_int64(sql_stmt_update_pose_prior_, 5, image_id));
+  const Eigen::Vector4d quat_wxyz(pose_prior.rotation.w(), pose_prior.rotation.x(), pose_prior.rotation.y(), pose_prior.rotation.z());
+  WriteStaticMatrixBlob(sql_stmt_update_pose_prior_, quat_wxyz, 5);
+  WriteStaticMatrixBlob(sql_stmt_update_pose_prior_, pose_prior.rotation_covariance, 6);
 
   SQLITE3_CALL(sqlite3_step(sql_stmt_update_pose_prior_));
 }
@@ -1876,6 +1858,8 @@ void Database::CreatePosePriorTable() const {
       "    position                   BLOB,"
       "    coordinate_system          INTEGER               NOT NULL,"
       "    position_covariance        BLOB,"
+      "    rotation                   BLOB,"                    
+      "    rotation_covariance        BLOB,"                    
       "    FOREIGN KEY(image_id) REFERENCES images(image_id) ON DELETE "
       "CASCADE);";
 
