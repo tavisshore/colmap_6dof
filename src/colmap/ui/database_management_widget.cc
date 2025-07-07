@@ -718,23 +718,29 @@ PosePriorsTab::PosePriorsTab(QWidget* parent, Database* database)
   grid->addWidget(info_label_, 0, 0);
 
   table_widget_ = new QTableWidget(this);
-  table_widget_->setColumnCount(14);
+  table_widget_->setColumnCount(20);
 
   QStringList table_header;
   table_header << "image_id"
                << "name"
-               << "x"
+               << "x" // Position in world coordinates
                << "y"
                << "z"
-              << "roll"
+              << "roll" // Rotation as Euler angles
                << "pitch"
                << "yaw"
-               << "cov_xx"
+               << "cov_xx" // Position covariance
                << "cov_yy"
                << "cov_zz"
                << "cov_xy"
                << "cov_xz"
-               << "cov_yz"; // Add rotation covariance ?
+               << "cov_yz"
+               << "R_xx" // Rotation covariance
+               << "R_yy"
+               << "R_zz"
+               << "R_xy"
+               << "R_xz"
+               << "R_yz"; 
   table_widget_->setHorizontalHeaderLabels(table_header);
 
   table_widget_->setShowGrid(true);
@@ -827,6 +833,32 @@ void PosePriorsTab::Reload() {
         row_idx,
         13,
         new QTableWidgetItem(QString::number(prior.position_covariance(1, 2))));
+
+    // Set rotation covariance values
+    table_widget_->setItem(
+        row_idx,
+        14,
+        new QTableWidgetItem(QString::number(prior.rotation_covariance(0, 0))));
+    table_widget_->setItem(
+        row_idx,
+        15,
+        new QTableWidgetItem(QString::number(prior.rotation_covariance(1, 1))));
+    table_widget_->setItem(
+        row_idx,
+        16,
+        new QTableWidgetItem(QString::number(prior.rotation_covariance(2, 2))));
+    table_widget_->setItem(
+        row_idx,
+        17,
+        new QTableWidgetItem(QString::number(prior.rotation_covariance(0, 1))));
+    table_widget_->setItem(
+        row_idx,
+        18,
+        new QTableWidgetItem(QString::number(prior.rotation_covariance(0, 2))));
+    table_widget_->setItem(
+        row_idx,
+        19,
+        new QTableWidgetItem(QString::number(prior.rotation_covariance(1, 2))));
 
     ++row_idx;
   }
